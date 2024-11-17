@@ -105,7 +105,7 @@ tokenizer.save_pretrained("glm-4-voice-9b-int4")
 
 ### （四）微调
 
-2024.11.17
+2024.11.17 用GPT的聊天记录微调Qwen2.5-7B-Instruct
 ----  
 我忽然有个大胆的想法，如果我拿我和GPT的聊天记录去微调Qwen2.5模型不就能得到高仿GPT了。  
 说干就干。于是我 clone 了llama-factory并导出了GPT的聊天记录，但是第一步准备数据集就难住了我  
