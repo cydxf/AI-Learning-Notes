@@ -29,6 +29,14 @@
 - PULID
 - Pyramid-Flow  
 ......
+
+To Do List
+1. AI PPT
+2. 会用表情包的模型
+3. 命令行调用任意模型
+4. 前端解析模型
+5. AI教师，根据PPT内容进行授课
+6. 模型模仿微信好友(多模态，主动性)
 ## 一、大模型
 ### （一）部署
 #### 常见问题
@@ -69,6 +77,172 @@ import ..janus
 import janus
 ```
 把`.`去掉就不会报错了
+
+#### NNLM
+NNLM即神经网络语言模型，当今大模型的鼻祖，是2003年提出的，其实原理非常简单
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.utils.data as Data
+from torch.autograd import Variable
+dtype = torch.FloatTensor
+
+sentences = ["i like dog", "i love coffee", "i have milk"]
+n_steps = 2
+n_hidden = 2
+m = 2
+
+word_list = " ".join(sentences).split(" ")
+print("未去重词表：", word_list)
+word_list = list(set(word_list))
+print("去重词表：", word_list)
+word_dict = {w: i for i, w in enumerate(word_list)}
+print("单词索引：", word_dict)
+number_dict = {i: w for i, w in enumerate(word_list)}
+print("索引单词：", number_dict)
+num_words = len(word_dict)
+print("单词总数：", num_words)
+
+class NNLM(nn.Module):
+    def __init__(self):
+        super(NNLM, self).__init__()
+        self.C = nn.Embedding(num_embeddings = num_words, embedding_dim = m)
+        self.d = nn.Parameter(torch.randn(n_hidden).type(dtype))
+        self.H = nn.Parameter(torch.randn(n_steps * m, n_hidden).type(dtype))
+        self.U = nn.Parameter(torch.randn(n_hidden, num_words).type(dtype))
+        self.b = nn.Parameter(torch.randn(num_words).type(dtype))
+        self.W = nn.Parameter(torch.randn(n_steps * m, num_words).type(dtype))
+
+    def forward(self, input):
+        x = self.C(input)
+        x = x.view(-1, n_steps * m)
+        hidden_out = torch.tanh(torch.mm(x, self.H) + self.d)
+        output = torch.mm(x, self.W) + torch.mm(hidden_out, self.U) + self.b
+        return output
+
+def make_batch(sentences):
+    input_batch = []
+    target_batch = []
+    for sentence in sentences:
+        word = sentence.split()
+        input = [word_dict[w] for w in word[:-1]]
+        target = word_dict[word[-1]]
+        input_batch.append(input)
+        target_batch.append(target)
+    return input_batch, target_batch
+
+input_batch, target_batch = make_batch(sentences)
+input_batch = torch.LongTensor(input_batch)
+target_batch = torch.LongTensor(target_batch)
+print("input_batch:", input_batch)
+print("target_batch：", target_batch)
+
+model = NNLM()
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+for epoch in range(2000):
+    optimizer.zero_grad()
+    output = model(input_batch)
+    loss = criterion(output, target_batch)
+    if (epoch + 1) % 100 == 0:
+        print("Epoch:{}".format(epoch + 1), "Loss:{:.4f}".format(loss))
+    loss.backward()
+    optimizer.step()
+
+pred = model(input_batch).data.max(1, keepdim=True)[1]
+print("Predict:", pred)
+print([sentence.split()[:2] for sentence in sentences], "---->", [number_dict[n.item()] for n in pred.squeeze()])
+```
+
+```bash
+未去重词表： ['i', 'like', 'dog', 'i', 'love', 'coffee', 'i', 'have', 'milk']
+去重词表： ['love', 'have', 'i', 'milk', 'like', 'dog', 'coffee']
+单词索引： {'love': 0, 'have': 1, 'i': 2, 'milk': 3, 'like': 4, 'dog': 5, 'coffee': 6}
+索引单词： {0: 'love', 1: 'have', 2: 'i', 3: 'milk', 4: 'like', 5: 'dog', 6: 'coffee'}
+单词总数： 7
+input_batch: tensor([[2, 4],
+        [2, 0],
+        [2, 1]])
+target_batch： tensor([5, 6, 3])
+Epoch:100 Loss:2.4958
+Epoch:200 Loss:1.8126
+Epoch:300 Loss:1.3478
+Epoch:400 Loss:1.0186
+Epoch:500 Loss:0.7990
+Epoch:600 Loss:0.6530
+Epoch:700 Loss:0.5379
+Epoch:800 Loss:0.4262
+Epoch:900 Loss:0.3175
+Epoch:1000 Loss:0.2278
+Epoch:1100 Loss:0.1640
+Epoch:1200 Loss:0.1213
+Epoch:1300 Loss:0.0926
+Epoch:1400 Loss:0.0729
+Epoch:1500 Loss:0.0588
+Epoch:1600 Loss:0.0484
+Epoch:1700 Loss:0.0405
+Epoch:1800 Loss:0.0344
+Epoch:1900 Loss:0.0296
+Epoch:2000 Loss:0.0257
+Predict: tensor([[5],
+        [6],
+        [3]])
+[['i', 'like'], ['i', 'love'], ['i', 'have']] ----> ['dog', 'coffee', 'milk']
+```
+
+#### GPT系列（GPT1、GPT2）
+GPT是第一个Transformer模型，使用的是Transformer的解码器，是条件语言模型，根据上文推下文  
+**GPT1**
+```python
+from transformers import pipeline, set_seed
+generator = pipeline('text-generation', model='./gpt', device='cuda:0')
+
+set_seed(42)
+
+output = generator("I love you,", max_length=30, num_return_sequences=1, truncation=True)
+
+print(output)
+```
+
+```bash
+[{'generated_text': 'I love you, don\'t ever leave me. " he kissed me and i felt him stiffen as his body pressed against mine. " i\'m sorry'}]
+```
+
+**GPT2**
+```python
+from transformers import pipeline
+
+generator = pipeline("text-generation", model="./gpt2", device="cuda:0")
+
+result = generator(
+    "Hello,",
+    truncation=True,
+    max_length=100
+)
+
+print(result)
+```
+```bash
+[{'generated_text': 'Hello, I wanted to tell you that we have been working with the NIMBYist Committee for a lot of years and we have been very thorough in identifying many of the issues that we are about to deal with and working with them. I am very grateful for their help throughout these negotiations on these. I am also proud to have worked with Jim for some time. So much so that there have been a great deal of progress made, and more progress made than I can bear. So I want'}]
+```
+#### BERT
+BERT是遮盖语言模型，使用整个Transformer，包含编码器和解码器，能填补文中的遮盖词
+```python
+from transformers import pipeline
+
+unmasker = pipeline('fill-mask', model='./bert')
+
+result = unmasker("I am [MASK] you are.")
+
+print(result)
+```
+
+```bash
+[{'score': 0.3266281187534332, 'token': 2040, 'token_str': 'who', 'sequence': 'i am who you are.'}, {'score': 0.19791413843631744, 'token': 2054, 'token_str': 'what', 'sequence': 'i am what you are.'}, {'score': 0.1181851178407669, 'token': 2469, 'token_str': 'sure', 'sequence': 'i am sure you are.'}, {'score': 0.06814499944448471, 'token': 2673, 'token_str': 'everything', 'sequence': 'i am everything you are.'}, {'score': 0.0540953129529953, 'token': 2035, 'token_str': 'all', 'sequence': 'i am all you are.'}]
+```
 ### （二）推理
 
 ### （三）量化
@@ -172,6 +346,7 @@ per_device_eval_batch_size: 1
 eval_strategy: steps
 eval_steps: 500
 ```
+![alt text](image-7.png)  
 等了一个晚上之后微调完成，微调日志见[Qwen2.5_GPT聊天记录微调日志](Qwen2.5_GPT聊天记录微调日志.log)。之后对模型进行了测试，但是发现结果不太好
 ```python
 prompt = "中国无法安装chatgpt app怎么办"
@@ -376,7 +551,263 @@ INFO:gguf.vocab:Setting chat_template to {%- if tools %}
 所以本次微调以失败告终，总结可能导致失败的原因是
 - ①聊天记录的上下文紧密关联，而制作数据集时直接忽略上下文关系进行拆分
 - ②聊天记录有些对话太长了，在微调时可能被截断导致模型学习时存在偏差
-- ③这是我第一次微调，所以只是依葫芦画瓢，那数据集里的instruct和input有啥区别我也不太懂，对话模板我也不知道怎么设置，参数设置也是直接照搬的
+- ③这是我第一次微调，所以只是依葫芦画瓢，那数据集里的instruct和input有啥区别我也不太懂，对话模板我也不知道怎么设置，参数设置也是直接照搬的  
+
+才发现原来llama-factory支持多轮对话微调，那这就是接下来第二次微调的方向了
+
+
+----
+（2024-11-19）没错，就是模板没对齐，自己用ollama部署的模型的配置完全依赖Modelfile,包含初始参数、模板等都需要在Modelfile中设置。而默认的模板是简单的
+```bash
+{{.prompt}}
+```
+肯定是对齐不上的，所以会出现异常。需要在Modelfile中预设模板才能得到正确的输出
+```bash
+FROM ./Qwen2.5-7B-Instruct-Q4_K_M.gguf
+TEMPLATE {{- if .Messages }}{{- if or .System .Tools }}<|im_start|>system{{- if .System }}{{ .System }}{{- end }}{{- if .Tools }}# Tools You may call one or more functions to assist with the user query. You are provided with function signatures within <tools></tools> XML tags:<tools>{{- range .Tools }}{"type": "function", "function": {{ .Function }} }{{- end }}</tools>{{- end }}<|im_end|>{{ end }}{{- range $i, $_ := .Messages }}{{- $last := eq (len (slice $.Messages $i)) 1 -}}{{- if eq .Role "user" }}<|im_start|>user{{ .Content }}<|im_end|>{{ else if eq .Role "assistant" }}<|im_start|>assistant{{ if .Content }}{{ .Content }}{{- else if .ToolCalls }}<tool_call>{{ range .ToolCalls }}{"name": "{{ .Function.Name }}", "arguments": {{ .Function.Arguments }}}{{ end }}</tool_call>{{- end }}{{ if not $last }}<|im_end|>{{ end }}{{- else if eq .Role "tool" }}<|im_start|>user<tool_response>{{ .Content }}</tool_response><|im_end|>{{ end }}{{- if and (ne .Role "assistant") $last }}<|im_start|>assistant{{ end }}{{- end }}{{- else }}{{- if .System }}<|im_start|>system{{ .System }}<|im_end|>{{ end }}{{ if .Prompt }}<|im_start|>user{{ .Prompt }}<|im_end|>{{ end }}<|im_start|>assistant{{ end }}{{ .Response }}{{ if .Response }}<|im_end|>{{ end }}
+```
+2024-11-19 用微信好友的聊天记录微调Qwen2.5-7B-Instruct
+----
+![alt text](image-2.png)
+发现微调会激发模型的危险性，尽管数据集中不包含任何不安全的内容。  
+其实是没有做安全对齐。  
+好了，讲讲这次微调的经历吧，这次微调最后是成功了的。
+
+想法就是用特定好友的聊天记录去微调模型复制这个好友(称为：tao)，这个好友呢也是我曾经的朋友，只不过现在是相忘于江湖了。有多模态的聊天记录，语音、图片、视频均有，但这次我们只考虑文本，有142条。首先用[PyWxDump](https://github.com/xaoyaoo/PyWxDump)导出csv格式的聊天记录。
+我最开始想着，聊天记录欸，那上下文关联很紧密的，得用多轮对话来微调吧。
+所以我用下面代码提出了一个多轮对话的Alpaca模板
+```python
+import csv
+import json
+from collections import defaultdict
+
+
+def process_chat_csv_to_json(csv_file_path, json_file_path):
+    # 读取CSV文件
+    conversations = defaultdict(list)
+
+    with open(csv_file_path, mode='r', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+
+        # 按日期将消息分组
+        for row in reader:
+            if row['type_name'] == '文本':  # 只处理文本消息
+                date = row['CreateTime'].split(' ')[0]  # 获取日期部分
+                conversations[date].append(row)
+
+    # 转换为JSON格式
+    json_data = []
+
+    for date, messages in conversations.items():
+        instruction = ""
+        output = ""
+        history = []
+
+        # 提取一轮对话中的内容
+        sender_messages = []  # 用于拼接is_sender=1的消息
+        receiver_messages = []  # 用于拼接is_sender=0的消息
+
+        last_sender = None  # 用于记录最后一个消息的is_sender
+
+        for i, message in enumerate(messages):
+            msg_content = message['msg']
+            is_sender = int(message['is_sender'])
+
+            if is_sender == 1:
+                # 处理is_sender=1的消息
+                if last_sender == 1:  # 如果上一个消息也是发信人，拼接
+                    sender_messages[-1] += " " + msg_content
+                else:
+                    sender_messages.append(msg_content)  # 否则新增一条消息
+            else:
+                # 处理is_sender=0的消息
+                if last_sender == 0:  # 如果上一个消息也是接收人，拼接
+                    receiver_messages[-1] += " " + msg_content
+                else:
+                    receiver_messages.append(msg_content)  # 否则新增一条消息
+
+            last_sender = is_sender  # 更新last_sender
+
+        # 处理历史对话，拼接多个对话历史
+        for i in range(min(len(sender_messages), len(receiver_messages))):
+            history.append([sender_messages[i], receiver_messages[i]])
+
+        # 如果有剩余的发送消息和接收消息，加入历史
+        for i in range(len(sender_messages) - len(receiver_messages)):
+            history.append([sender_messages[len(receiver_messages) + i], ""])  # 只剩发送消息
+        for i in range(len(receiver_messages) - len(sender_messages)):
+            history.append(["", receiver_messages[len(sender_messages) + i]])  # 只剩接收消息
+
+        # 构建最终的 instruction 和 output
+        if sender_messages:
+            instruction = sender_messages[0]  # 第一条消息作为 instruction
+        if receiver_messages:
+            output = receiver_messages[0]  # 第一条消息作为 output
+
+        # 生成对话轮次
+        conversation = {
+            "instruction": instruction,
+            "input": "",
+            "output": output,
+            "history": history
+        }
+        json_data.append(conversation)
+
+    # 写入JSON文件
+    with open(json_file_path, mode='w', encoding='utf-8') as jsonfile:
+        json.dump(json_data, jsonfile, ensure_ascii=False, indent=4)
+
+
+# 示例调用
+process_chat_csv_to_json('tao.csv', 'tao_multi.json')
+```
+
+![alt text](image-3.png)
+
+然后每轮对话我是按天数来划分的，但是总共只有14天，数据非常少，最后炼出来发现损失非常高，微调无效，把学习率和训练轮数调大也不行，一方面是数据太少，还有一个问题是每轮对话太长，信息量太大，模型不能很好地捕捉特征，导致欠拟合。
+
+所以我还是换成一条一条的单轮对话格式了
+```python
+import csv
+import json
+
+
+# 读取CSV文件并返回内容
+def read_csv(file_path):
+    with open(file_path, mode='r', encoding='utf-8') as file:
+        reader = csv.DictReader(file)
+        return [row for row in reader]
+
+
+# 处理CSV数据并转换为对话形式
+def process_chat_data(csv_data):
+    conversations = []
+    current_instruction = ""
+    current_output = ""
+
+    # 记录是否是开始新的对话
+    is_in_instruction = False
+
+    for row in csv_data:
+        if row['type_name'] == '文本':  # 只处理文本消息
+            msg = row['msg']
+            is_sender = int(row['is_sender'])
+
+            if is_sender == 1:
+                # 如果是发送者1的消息
+                if is_in_instruction:
+                    # 如果前一条消息也是发送者1，则拼接
+                    current_instruction += msg + ','
+                else:
+                    # 如果是新一轮的对话，开始一个新的instruction
+                    if current_instruction and current_output:
+                        conversations.append({
+                            'instruction': current_instruction.strip(),
+                            'input': '',
+                            'output': current_output.strip()
+                        })
+                    current_instruction = msg + ','  # 开始拼接新一轮的instruction
+                    current_output = ""  # 清空输出
+                    is_in_instruction = True  # 设置为正在拼接instruction
+            elif is_sender == 0:
+                # 如果是发送者0的消息
+                if is_in_instruction:
+                    current_output += msg + ','
+                    is_in_instruction = False  # 已经接收到一个输出，开始拼接新的instruction
+                else:
+                    # 如果是新的对话轮次，开始一个新的output
+                    current_output = msg + ','  # 开始拼接output
+
+    # 最后一轮对话也需要添加
+    if current_instruction and current_output:
+        conversations.append({
+            'instruction': current_instruction.strip(),
+            'input': '',
+            'output': current_output.strip()
+        })
+
+    return conversations
+
+
+# 将处理后的数据写入JSON文件
+def write_json(conversations, output_file_path):
+    with open(output_file_path, 'w', encoding='utf-8') as f:
+        json.dump(conversations, f, ensure_ascii=False, indent=4)
+
+
+# 主函数
+def main():
+    # CSV文件路径
+    input_csv_path = 'tao.csv'
+    # 输出的JSON文件路径
+    output_json_path = 'tao.json'
+
+    # 读取CSV数据
+    csv_data = read_csv(input_csv_path)
+
+    # 处理数据
+    conversations = process_chat_data(csv_data)
+
+    # 写入JSON文件
+    write_json(conversations, output_json_path)
+
+    print(f"JSON数据已保存至 {output_json_path}")
+
+
+if __name__ == '__main__':
+    main()
+```
+![alt text](image-4.png)
+
+最开始训练轮数是3，效果不好，调到5还是不行，最后训练轮数调到10并且学习率也调大然后损失降到0.033才出效果，模型才知道自我身份，但是对于数据集中已给出特定答案的还是没法回答准确，所以就同义重复指令扩充数据集最后才调出预期效果。
+```yaml
+### model
+model_name_or_path: ./Qwen2.5-7B-Instruct
+quantization_bit: 4
+
+### method
+
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_target: all
+
+### dataset
+dataset: tao
+template: qwen
+cutoff_len: 2048
+max_samples: 1000
+overwrite_cache: true
+preprocessing_num_workers: 16
+
+### output
+output_dir: saves/qwen2.5-tao-7b/lora/sft
+logging_steps: 10
+save_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 3.0e-4
+num_train_epochs: 10.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+
+### eval
+val_size: 0.1
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 500
+```
+![alt text](image-5.png)
+
+然后导出GGUF部署到ollama依旧出现了之前的问题，甚至还出现了严重的安全问题，模型输出全是黄色淫秽内容。  
+最后在Modelfile设置Qwen2.5的对话模板成功解决。
+![alt text](image-6.png)
 ### （五）训练
 ## 多模态大模型
 ### （一）部署
@@ -386,6 +817,14 @@ INFO:gguf.vocab:Setting chat_template to {%- if tools %}
 ### （五）训练
 ## 语音
 ### （一）语音识别
+2024-11-17 FunASR paraformer-zh模型教学音频训练
+----
+先用宋浩老师的教学音频进行测试，分为单卡测试、多卡测试、租卡测试，主要测试速度以及性能  
+目前已经下载好了所有视频，包含旧版的和新版的，每个都是40分钟左右  
+要做的第一件事就是拆分音频，因为长音频整体输入会使模型处理的信息量过大，可能会遇到梯度消失或梯度爆炸等问题，而且模型很难有效地学习到音频中的细节和规律。而短音频能够让模型聚焦于较小片段的语音特征，能更好地捕捉局部的语音模式，像语音的语调变化、特定词汇的发音方式等，有助于提高模型对语音细节的识别能力。同时，这样也可以增加训练样本的数量，让模型从更多不同的语音片段中学习，从而提高模型的泛化能力。  
+
+打算先用FunASR识别出所有音频并进行时间标注和标点，然后用句号分割成小音频片段并附上标注文本，按7：1：2划分训练集、验证集和测试集
+
 ### （二）语音合成
 ## 图像
 ### （一）文生图
