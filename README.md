@@ -274,6 +274,160 @@ EchoMimic推出了V2版本，能画手了，我迫不及待地试了一下
 我觉得它不仅仅是答对了，关键是它真的在思考在试错
 
 ### （二）推理
+#### Q-Bench
+Aria的Q-Bench-A1-Single-dev代码示例
+```python
+"""
+aria的q-bench测试代码，模型的原始输出最后会有结束符<|im_end|>，需要剔除
+直接运行会爆显存，load_in_4bit or 8bit 会报错 not same size
+分配到多个GPU上可以跑
+"""
+
+import requests
+import torch
+from PIL import Image
+from transformers import AutoModelForCausalLM, AutoProcessor
+from tqdm import tqdm
+from datasets import load_dataset
+import os
+
+
+# Load dataset
+ds = load_dataset("q-future/Q-Bench-HF")
+
+
+model_id_or_path = "/data/models/Aria/"
+
+# Load model
+model = AutoModelForCausalLM.from_pretrained(
+    model_id_or_path,
+    device_map="auto",  # Automatically distribute the model across multiple GPUs
+    torch_dtype=torch.float16,  # float16 for better performance
+    trust_remote_code=True
+)
+
+# Wrap the model in DataParallel for multi-GPU training
+if torch.cuda.device_count() > 1:
+    print(f"Using {torch.cuda.device_count()} GPUs!")
+    model = torch.nn.DataParallel(model)  # This will automatically use all available GPUs
+
+processor = AutoProcessor.from_pretrained(model_id_or_path, trust_remote_code=True)
+
+# 初始化准确率计数
+accuracy_by_question_type = {0: 0, 1: 0, 2: 0}
+accuracy_by_question_concern = {0: 0, 1: 0, 2: 0, 3: 0}
+total_correct = 0
+total_questions = 0
+
+# 计算每种类型和关注点的准确率
+question_type_counts = {0: 0, 1: 0, 2: 0}
+question_concern_counts = {0: 0, 1: 0, 2: 0, 3: 0}
+
+# 开始测试，使用tqdm显示进度
+for example in tqdm(ds["dev"], desc="Evaluating", ncols=100):
+    image = example['image']
+    question = example['question']
+    options = [example['option0'], example['option1'], example['option2'], example['option3']]
+    correct_choice = example['correct_choice']
+    question_type = example['question_type']
+    question_concern = example['question_concern']
+
+
+    messages = [
+    {
+        "role": "user",
+        "content": [
+            {"text": None, "type": "image"},
+            {"text": f"{question} Answer with the option's letter from the given choices directly.Only reply the uppercase letter of the correct option.\n A: {options[0]}\nB: {options[1]}\nC: {options[2]}\nD: {options[3]}\n", "type": "text"},
+        ],
+    }
+]
+
+    text = processor.apply_chat_template(messages, add_generation_prompt=True)
+    inputs = processor(text=text, images=image, return_tensors="pt")
+
+    # Ensure inputs are on the correct device and have the correct dtype
+    device = model.module.device if isinstance(model, torch.nn.DataParallel) else model.device
+
+    inputs["pixel_values"] = inputs["pixel_values"].to(torch.float16).to(device)  # Image to float16 for compatibility
+    inputs["input_ids"] = inputs["input_ids"].to(torch.int32).to(device)  # Text to int32 for compatibility
+
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    # Perform inference
+    with torch.inference_mode():
+        # Use model.module to access the actual model and call generate
+        output = model.module.generate(
+            **inputs,
+            max_new_tokens=500,
+            stop_strings=["<|im_end|>"],
+            tokenizer=processor.tokenizer,
+            do_sample=True,
+            temperature=0.9,
+        )
+
+        output_ids = output[0][inputs["input_ids"].shape[1]:]
+        result = processor.decode(output_ids, skip_special_tokens=True)
+        result = result.replace("<|im_end|>","").strip()
+
+
+    is_correct = result[0].lower() == correct_choice.lower()
+    if is_correct:
+        total_correct += 1
+
+    # 更新准确率统计
+    total_questions += 1
+    if question_type in accuracy_by_question_type:
+        question_type_counts[question_type] += 1
+        if is_correct:
+            accuracy_by_question_type[question_type] += 1
+    
+    if question_concern in accuracy_by_question_concern:
+        question_concern_counts[question_concern] += 1
+        if is_correct:
+            accuracy_by_question_concern[question_concern] += 1
+    
+    # 输出当前问题、模型回答、标准答案、当前总准确率
+    current_accuracy = total_correct / total_questions
+    print(f"Question: {question}")
+    print(f"Model Answer: {result}")
+    print(f"Correct Answer: {correct_choice}")
+    print(f"Current Accuracy: {current_accuracy:.4f}")
+
+# 汇总结果
+print("\nFinal Results:")
+print(f"Total Accuracy: {total_correct / total_questions:.4f}")
+print("Accuracy by Question Type:")
+for qtype, count in question_type_counts.items():
+    if count > 0:
+        accuracy = accuracy_by_question_type[qtype] / count
+        print(f"Type {qtype}: {accuracy:.4f}")
+
+print("Accuracy by Question Concern:")
+for qconcern, count in question_concern_counts.items():
+    if count > 0:
+        accuracy = accuracy_by_question_concern[qconcern] / count
+        print(f"Concern {qconcern}: {accuracy:.4f}")
+
+# 保存汇总结果到文件
+results_dir = "./results"
+os.makedirs(results_dir, exist_ok=True)
+
+with open(os.path.join(results_dir, "summary_results.txt"), "w") as f:
+    f.write(f"Total Accuracy: {total_correct / total_questions:.4f}\n")
+    f.write("Accuracy by Question Type:\n")
+    for qtype, count in question_type_counts.items():
+        if count > 0:
+            accuracy = accuracy_by_question_type[qtype] / count
+            f.write(f"Type {qtype}: {accuracy:.4f}\n")
+    
+    f.write("Accuracy by Question Concern:\n")
+    for qconcern, count in question_concern_counts.items():
+        if count > 0:
+            accuracy = accuracy_by_question_concern[qconcern] / count
+            f.write(f"Concern {qconcern}: {accuracy:.4f}\n")
+
+```
 
 ### （三）量化
 这是使用CUDA ToolKit对GLM-4-Voice进行INT4量化的代码
